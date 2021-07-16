@@ -920,6 +920,12 @@ type PingRequest struct {
 	// Log is whether to log about this ping in the success case.
 	// For failure cases, the client will log regardless.
 	Log bool `json:",omitempty"`
+
+	// Types is the types of ping that is initiated. Can be TSMP, ICMP or DISCO
+	Types string
+
+	// IP is the IP that we will attempt to Ping
+	IP netaddr.IP
 }
 
 type MapResponse struct {
