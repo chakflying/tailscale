@@ -921,10 +921,12 @@ type PingRequest struct {
 	// For failure cases, the client will log regardless.
 	Log bool `json:",omitempty"`
 
-	// Types is the types of ping that is initiated. Can be TSMP, ICMP or DISCO
+	// Types is the types of ping that is initiated. Can be TSMP, ICMP or disco.
+	// Types will be comma separated, such as TSMP, disco.
 	Types string
 
-	// IP is the IP that we will attempt to Ping
+	// IP is the ping target.
+	// It is used in TSMP pings, if IP is absent then do a normal http ping to the URL.
 	IP netaddr.IP
 }
 
