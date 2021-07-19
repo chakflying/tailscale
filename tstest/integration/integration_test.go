@@ -20,6 +20,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -311,6 +312,106 @@ func TestAddPingRequest(t *testing.T) {
 	t.Error("all ping attempts failed")
 }
 
+func TestTaildrop(t *testing.T) {
+	t.Parallel()
+	bins := BuildTestBinaries(t)
+
+	env := newTestEnv(t, bins, configureControl(func(control *testcontrol.Server) {
+		control.AllNodesSameUser = true
+	}))
+	defer env.Close()
+
+	n1 := newTestNode(t, env)
+	n1SocksAddrCh := n1.socks5AddrChan()
+	d1 := n1.StartDaemon(t)
+	defer d1.Kill()
+
+	n2 := newTestNode(t, env)
+	n2SocksAddrCh := n2.socks5AddrChan()
+	d2 := n2.StartDaemon(t)
+	defer d2.Kill()
+
+	n1Socks := n1.AwaitSocksAddr(t, n1SocksAddrCh)
+	n2Socks := n1.AwaitSocksAddr(t, n2SocksAddrCh)
+	t.Logf("node1 SOCKS5 addr: %v", n1Socks)
+	t.Logf("node2 SOCKS5 addr: %v", n2Socks)
+	d1.Cmd.Env = append(d1.Cmd.Env, "ALL_PROXY="+n1Socks)
+	d2.Cmd.Env = append(d2.Cmd.Env, "ALL_PROXY="+n2Socks)
+
+	for _, n := range env.Control.AllNodes() {
+		n.Capabilities = append(n.Capabilities, tailcfg.CapabilityFileSharing)
+	}
+
+	n1.AwaitListening(t)
+	n2.AwaitListening(t)
+	n1.MustUp()
+	n2.MustUp()
+	n1.AwaitRunning(t)
+	n2.AwaitRunning(t)
+
+	target := n2.AwaitIP(t)
+
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	fileName := "taildrop.txt"
+	filePath := path.Join(srcDir, fileName)
+	contents := []byte("Taildrop drop bop 💧 ??%@#@123˙©∆∆˚ 水平線")
+	if err := ioutil.WriteFile(filePath, contents, 0666); err != nil {
+		t.Errorf("Failed to write to file: %v", err)
+	}
+
+	// Need ALL_PROXY=SOCKS because peerapi was not configured to work with userspace-networking
+	// yet. It's necessary on both get and cp, for reasons.
+
+	getCmd := n2.Tailscale("file", "get", "-wait", dstDir)
+	if err := getCmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	targetsOutput, err := n1.Tailscale("file", "cp", "-targets").CombinedOutput()
+	if err != nil {
+		t.Fatal(string(targetsOutput), err)
+	}
+	if !bytes.Contains(targetsOutput, []byte(target.String())) {
+		t.Errorf("Missing target from cp -targets, want: %v, in: %v", target, targetsOutput)
+	}
+
+	cpCmd := n1.Tailscale("file", "cp", filePath, fmt.Sprintf("%s:", target))
+	out, err := cpCmd.CombinedOutput()
+	if err != nil {
+		t.Fatal(string(out), err)
+	}
+
+	// TODO if this doesn't complete it sits here forever
+	if err := getCmd.Wait(); err != nil {
+		t.Error(err)
+	}
+
+	files, err := ioutil.ReadDir(dstDir)
+	if err != nil {
+		t.Error(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("want 1 file, got %d", len(files))
+	}
+
+	gotFile := files[0]
+	if !strings.Contains(fileName, gotFile.Name()) {
+		t.Errorf("want file name %s, got %s", fileName, gotFile.Name())
+	}
+	got, err := ioutil.ReadFile(path.Join(dstDir, gotFile.Name()))
+	if err != nil {
+		t.Errorf("Failed to read from cp'd file: %v", err)
+	}
+	if !bytes.Equal(got, contents) {
+		t.Errorf("mismatched taildrop contents, want %s, got %s", contents, got)
+	}
+
+	d1.MustCleanShutdown(t)
+	d2.MustCleanShutdown(t)
+}
+
 // Issue 2434: when "down" (WantRunning false), tailscaled shouldn't
 // be connected to control.
 func TestNoControlConnectionWhenDown(t *testing.T) {
@@ -575,6 +676,7 @@ func (op *nodeOutputParser) parseLines() {
 
 type Daemon struct {
 	Process *os.Process
+	Cmd     *exec.Cmd
 }
 
 func (d *Daemon) Kill() {
@@ -616,6 +718,7 @@ func (n *testNode) StartDaemon(t testing.TB) *Daemon {
 	}
 	return &Daemon{
 		Process: cmd.Process,
+		Cmd:     cmd,
 	}
 }
 
