@@ -21,6 +21,35 @@ import (
 	"tailscale.com/wgengine/wgcfg"
 )
 
+func TestHash(t *testing.T) {
+	type tuple [2]interface{}
+	tests := []struct {
+		in     tuple
+		wantEq bool
+	}{
+		{in: tuple{false, true}, wantEq: false},
+		{in: tuple{true, true}, wantEq: true},
+		{in: tuple{false, false}, wantEq: true},
+		{
+			in: func() tuple {
+				i1 := 1
+				i2 := 2
+				v1 := [3]*int{&i1, &i2, &i1}
+				v2 := [3]*int{&i1, &i2, &i2}
+				return tuple{v1, v2}
+			}(),
+			wantEq: false,
+		},
+	}
+
+	for _, tt := range tests {
+		gotEq := Hash(tt.in[0]) == Hash(tt.in[1])
+		if gotEq != tt.wantEq {
+			t.Errorf("(Hash(%v) == Hash(%v)) = %v, want %v", tt.in[0], tt.in[1], gotEq, tt.wantEq)
+		}
+	}
+}
+
 func TestDeepHash(t *testing.T) {
 	// v contains the types of values we care about for our current callers.
 	// Mostly we're just testing that we don't panic on handled types.
@@ -157,12 +186,10 @@ func TestHashMapAcyclic(t *testing.T) {
 		buf.Reset()
 		bw.Reset(&buf)
 		h := &hasher{
-			bw:      bw,
-			visited: map[uintptr]bool{},
+			bw:         bw,
+			visitStack: map[uintptr]int{},
 		}
-		if !h.hashMapAcyclic(v) {
-			t.Fatal("returned false")
-		}
+		h.hashMap(v)
 		if got[string(buf.Bytes())] {
 			continue
 		}
@@ -177,12 +204,12 @@ func TestPrintArray(t *testing.T) {
 	type T struct {
 		X [32]byte
 	}
-	x := &T{X: [32]byte{1: 1, 31: 31}}
+	x := T{X: [32]byte{1: 1, 31: 31}}
 	var got bytes.Buffer
 	bw := bufio.NewWriter(&got)
 	h := &hasher{
-		bw:      bw,
-		visited: map[uintptr]bool{},
+		bw:         bw,
+		visitStack: map[uintptr]int{},
 	}
 	h.print(reflect.ValueOf(x))
 	bw.Flush()
@@ -208,16 +235,14 @@ func BenchmarkHashMapAcyclic(b *testing.B) {
 	v := reflect.ValueOf(m)
 
 	h := &hasher{
-		bw:      bw,
-		visited: map[uintptr]bool{},
+		bw:         bw,
+		visitStack: map[uintptr]int{},
 	}
 
 	for i := 0; i < b.N; i++ {
 		buf.Reset()
 		bw.Reset(&buf)
-		if !h.hashMapAcyclic(v) {
-			b.Fatal("returned false")
-		}
+		h.hashMap(v)
 	}
 }
 
