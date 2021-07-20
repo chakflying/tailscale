@@ -20,6 +20,8 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
+
+	_ "go4.org/unsafe/assume-no-moving-gc" // see hasher.visitStack
 )
 
 const scratchSize = 128
@@ -34,7 +36,10 @@ type hasher struct {
 	// visitStack is a stack of pointers visited.
 	// Pointers are pushed onto the stack when visited, and popped when leaving.
 	// The integer value is the depth at which the pointer was visited.
-	// The length of this stack should be zero after ever hashing operation.
+	// The length of this stack should be zero after every hashing operation.
+	//
+	// Using uintptr will break if Go every switches to a moving GC.
+	// TODO(dsnet): Should this be an unsafe.Pointer?
 	visitStack map[uintptr]int
 }
 
